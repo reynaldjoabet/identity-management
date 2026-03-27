@@ -1,8 +1,7 @@
 import Dependencies._
 
-ThisBuild / scalaVersion     := "3.3.7"
-ThisBuild / version          := "0.1.0-SNAPSHOT"
-
+ThisBuild / scalaVersion := "3.3.7"
+ThisBuild / version := "0.1.0-SNAPSHOT"
 
 ThisBuild / scalacOptions ++= Seq(
   "-no-indent",
@@ -18,7 +17,7 @@ ThisBuild / scalacOptions ++= Seq(
   //   "-Wvalue-discard",
   // "-language:strictEquality",
   "-Xmax-inlines:100000"
-) 
+)
 
 lazy val root = (project in file("."))
   .settings(

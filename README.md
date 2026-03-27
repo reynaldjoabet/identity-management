@@ -5,27 +5,24 @@ The service implements OpenID Connect (OIDC) through Duende Identity Server and 
 This uses duende/ authlete to serve as its OpenID Connect(OIDC) provider,handling authentication with efficiency
 
 To understand how IdM works, it helps to break it down into four key functions:
-
 - Identification: Who are you? (e.g., a username or email).
 - Authentication: Prove it. (e.g., passwords, biometrics, or security tokens).
 - Authorization: What are you allowed to do? (e.g., Can you view the file, or can you edit it?).
 - Auditing: What did you do? (Tracking actions to ensure compliance and security).
 
-Duende is a library while keycloak is a product
+*Duende is a library while Keycloak is a product*
 
 both duende and authlete are built for developers who want to build their own identityPrvider(Idp)
 
-```sh
-Feature	     Duende IdentityServer	                   Authlete
-Type	       Software Library / SDK	"Semi-Hosted"      Backend-as-a-Service
-Language	   Strictly .NET / C#	Language Agnostic      (any language)
-Data Storage	You manage the DB (SQL, etc.)	            Authlete stores the OAuth tokens/clients
-User Data	    You manage the users	                    You manage the users (Authlete never sees them)
-UI / UX	      You build the UI in your app	            You build the UI in your app
-```
+| Feature | Duende IdentityServer | Authlete |
+| :--- | :--- | :--- |
+| Type | Software Library / SDK | "Semi-Hosted" Backend-as-a-Service |
+| Language | Strictly .NET / C# | Language Agnostic (any language) |
+| Data Storage | You manage the DB (SQL, etc.) | Authlete stores the OAuth tokens/clients |
+| User Data | You manage the users | You manage the users (Authlete never sees them) |
+| UI / UX | You build the UI in your app | You build the UI in your app |
 
 When to choose Authlete over Duende
-
 - Multi-Language: If your team doesn't use .NET, Duende isn't an option. Authlete works with everything.
 - Compliance: Authlete is obsessed with high-level security standards (like FAPI for banking). If you are in FinTech, Authlete is often easier than configuring Duende to meet those specific audits.
 - Infrastructure: If you want to offload the headache of managing "Token Lifecycles" (revoking tokens, rotating keys) but still want 100% control over your Login UI, Authlete is the middle ground
@@ -33,21 +30,94 @@ When to choose Authlete over Duende
 ## What is the difference between api level and scope level claims? 
 A Claim is a piece of data (like email: "bob@me.com" or role: "admin"), and a Scope is just a "container" or "permission" that the client asks for.
 
-Scope: profile
-Claims inside it: given_name, family_name, birthdate.
+## `Scope` 
+A scope is a named permission that a client can request when asking for an access token. Scopes are defined in the IdentityServer configuration and can be associated with specific claims. When a client requests a scope, the claims associated with that scope are included in the access token if the user consents to it.
+- profile: Claims inside it: `given_name`, `family_name`, `birthdate`.
+- A shipping scope that only includes the address claim
 
-a shipping scope that only includes the address claim
+In Duende IdentityServer (and OpenID Connect in general), a `scope` is essentially just a named collection of `claims`. You can define custom scopes and explicitly tell the Identity provider exactly which claims belong inside them.
+To make a `shipping` scope that only includes the address claim, you define it as an Identity Resource in your IdentityServer configuration.
 
-API-level claims (often referred to in Duende as ApiResource Claims) are tied to the entire API, regardless of which specific scope was used
+```c#
+public static IEnumerable<IdentityResource> IdentityResources =>
+    new List<IdentityResource>
+    {
+        // Standard scopes
+        new IdentityResources.OpenId(),
+        new IdentityResources.Profile(),
+        
+        // Custom shipping scope mapping to the 'address' claim
+        new IdentityResource(
+            name: "shipping",
+            displayName: "Shipping Details",
+            userClaims: new[] { "address" } // Only include the address claim
+        )
+    };
+```
 
-"If you are calling any part of this API, you always need these pieces of data."
+## Api Rescources
+The concept of API Resources was introduced primarily to solve security, privacy, and architectural problems that arise when you strictly rely on "Scopes" in a distributed microservices environment.
+Historically, OAuth 2.0 just dealt with scopes (e.g., read, write). But as architectures grew into multiple distinct APIs, relying only on scopes created several major issues:
 
+1. **The "Audience" Problem (Preventing Token Leakage)**
+Imagine a client application gets an access token with a broad scope like `user.read`. The token doesn't specify which API it's meant for. If the client uses that token to call the Shipping API, the Shipping API has no way of knowing if that token was intended for it or for another API (like Billing).
+- The client sends this token to the Shipping API.
+- If the Shipping API acts maliciously (or is compromised), it could take that exact same token and use it against the Billing API, because the token simply says it has `user.read` access.
+- The Fix: API Resources allow the Identity Provider to track which physical/logical APIs are tied to the requested scopes. The IdentityProvider uses this to populate the `aud` (Audience) claim in the token.
+If a token is generated for the Shipping API Resource, its `aud` claim will be `shipping_api`. When the Billing API receives it, it will inspect the `aud` claim, see `shipping_api`, and immediately reject it.
+
+2. **Token Bloat and Privacy**
+If you have 10 different microservices, they might all need different pieces of user data. Your BillingAPI needs a `credit_card_id`, and your ShippingAPI needs an `address`.
+If you didn't have API Resources, the Identity Provider wouldn't know which API the token was ultimately going to. To be safe, it would have to stuff every possible claim related to the requested scopes into the token.
+- The Result: The JWT becomes massively bloated (causing HTTP header size limits to be exceeded), and you leak sensitive billing data to the Shipping API.
+- The Fix: By defining an ApiResource, you tell IdentityServer: "When a token is being built specifically for this API Resource, only put these specific claims into it."
+3. **Decoupling Permissions (Scopes) from Physical APIs (Resources)**
+Sometimes, you want multiple APIs to share the same overarching permission
+4. **Support for Resource Indicators (RFC 8707)**
+API Resources align well with the newer OAuth 2.0 Resource Indicators specification, which allows clients to explicitly request access tokens for specific target services using the resource parameter
+```sql
+INSERT INTO api_resource_scopes (api_resource_id, scope)
+VALUES 
+    ((SELECT id FROM api_resources WHERE name = 'accounting_api'), 'data.read'),
+    ((SELECT id FROM api_resources WHERE name = 'shipping_api'), 'data.read');
+```  
+ the scope `data.read` is a conceptual permission. But the API Resources represent the actual physical boundaries (`accounting_api` and `shipping_api`). Because of API Resources, if a client requests `data.read`, IdentityServer knows to put both `accounting_api` and `shipping_api` into the token's `aud` array, granting the token safe passage to both systems without needing to create redundant scopes like `accounting.data.read` and `shipping.data.read`.  
+
+ ## ApiResourceProperty
+ In Duende IdentityServer, an `ApiResourceProperty` is simply a custom key-value pair used to store arbitrary metadata about an `API Resource`.
+While IdentityServer provides standard fields for an `ApiResource` (like `Name`, `DisplayName`, `Scopes`, and `UserClaims`), every application has unique business requirements. Instead of forcing you to modify the core database schema every time you need to store extra information about an API, IdentityServer provides the `Properties` collection.
+
+### Common Use Cases for ApiResourceProperty:
+- `UI Hints / Customization`: You might add a property like Key: `"icon_url", Value: "https://.../billing-icon.png"`. Your admin dashboard or user consent screen can read this property to render a nice UI.
+- `Integration with External Systems`: Storing an internal ID or legacy system mapping (e.g., Key: `"legacy_system_id", Value: "10485"`).
+
+## ApiResourceScope
+An `ApiResourceScope` is a specific scope that belongs to an API Resource. It represents a permission or action that clients can request when they want to access that API.
+
+When you define an `ApiResource`, you can associate it with one or more `ApiResourceScopes`. Each scope represents a specific permission or level of access within that API. When a client requests a scope, IdentityServer checks which API Resource it belongs to and includes the appropriate claims in the access token.
+it defines which scopes (permissions) are valid for this specific API.
+It acts as a junction (mapping) between a physical API (`ApiResource`) and a permission (`ApiScope`).
+
+If a client asks for `scope=data.read`, IdentityServer looks up all ApiResourceScope records. If it finds a link between data.read and the `InvoicingAPI` resource, it adds `InvoicingAPI` to the token's `aud` (audience) claim so the token can be used there
+## API-Level Claims(ApiResourceClaims)
+API-level claims (often referred to in Duende as ApiResource Claims) are tied to the entire API, regardless of which specific scope was used. "If you are calling any part of this API, you always need these pieces of data."
 Example: API Resource: InvoicingAPI
 Claims inside it: `tenant_id`, `subscription_level`.
 
-No matter if the client asks for invoicing.read or invoicing.admin, as long as they are hitting the InvoicingAPI, the Identity Server will include the `tenant_id` and `subscription_level` in the access token.
+No matter if the client asks for `invoicing.read` or `invoicing.admin`, as long as they are hitting the `InvoicingAPI`, the Identity Server will include the `tenant_id` and `subscription_level` in the access token.
 
 Best for Infrastructure data that the API needs for every single request (like a `user_id` or `org_id`) to perform basic routing or database filtering
+
+When a user logs in, they might have 50 different claims (`role`, `department`, `location`, `manager`, `employee_id`, etc.) in your database. You don't want to put all 50 claims into every system's access token because it would make the tokens massive (token bloat).
+
+IdentityServer uses the `ApiResourceClaim` entries to ask the IProfileService: "The client is asking for a token for the Billing API. The Billing API only defined `'role'` and `'department'` in its `ApiResourceClaims`. Please only fetch those two user claims and put them in the token."
+
+Conceptually, it defines "claims needed by the API". Mechanically, IdentityServer uses it as a whitelist to filter User Claims during token generation. If you are dealing with machine-to-machine tokens, `ApiResourceClaim` won't really do anything.
+
+### Common Real-World Use Cases
+- `Multi-Tenancy (Routing & Filtering)`: Claims like `tenant_id` or `organization_id`. Every single endpoint in your AccountingAPI needs to know which company's data to manipulate. It doesn't matter if the client is doing a "read" or a "write"; the API fundamentally needs the `tenant_id`.
+- `Global Access Control`: Claims like `role` or `subscription_tier`. If the API needs to globally rate-limit "free" tier users or globally reject requests from users without the "employee" role, those claims must always be present.
+- `Legacy Integration`: An API might route requests to a legacy system that uniformly requires an `employee_number` mapped to a specific HTTP header for every call.
 
 ```sql
 START TRANSACTION;
@@ -71,6 +141,39 @@ VALUES
 COMMIT;
 ```
 
+```scala
+case class ApiResource(
+    id: Int,
+    name: String,
+    displayName: Option[String] = None,
+  secrets: List[ApiResourceSecret] = Nil,
+    scopes: List[ApiResourceScope] = Nil,
+    userClaims: List[ApiResourceClaim] = Nil,
+    properties: List[ApiResourceProperty] = Nil
+)
+
+final case class ApiResourceScope(
+    id: Int,
+    scope: String,
+    apiResourceId: Int,
+    apiResource: Option[ApiResource] = None
+)
+final case class ApiResourceClaim(
+    id: Int,
+    claimType: String,
+    apiResourceId: Int,
+    apiResource: ApiResource
+) extends UserClaim(id, claimType) // api-level claims are a special type of user claim that are always included in the token when any scope from that API is requested
+
+final case class ApiResourceProperty(
+    id: Int,
+    key: String,
+    value: String,
+    apiResourceId: Int,
+    apiResource: Option[ApiResource] = None
+) extends Property(id, key, value)
+```
+
 ```json
 {
   "iss": "https://identity.yourcompany.com",
@@ -86,10 +189,44 @@ COMMIT;
   "exp": 1704450000
 }
 ```
+```json
+{
+  "client_id": "react_app",         <-- WHO asked for this token
+  "scope": ["data.read"],           <-- WHAT they are allowed to do
+  "aud": [
+    "InvoicingAPI",                 <-- WHERE this token is allowed to be sent
+    "ReportingAPI"
+  ]
+}
+```
+## Api Scope
+```scala
+final case class ApiScope(
+    id: Int,
+    name: String,
+    displayName: Option[String] = None,
+    userClaims: List[ApiScopeClaim] = Nil,
+    properties: List[ApiScopeProperty] = Nil
+)
+```
+## ApiScopeClaim vs ApiResourceClaim
+Both determine which user claims (like `role`, `department`, `tenant_id`) get injected into the access token, but they trigger at different levels. IdentityServer takes the union of both lists when generating the token.
+
+- `ApiScopeClaim (Permission-level)`:
+Trigger: Included only when this specific scope is requested.
+Use Case: Use this when a specific action requires specific user data.
+Example: The `transfer_funds` scope requires the user's `spending_limit` claim. If they only ask for `view_balance`, they don't get the `spending_limit` claim in their token.
+- `ApiResourceClaim (API-level)`:
+Trigger: Included whenever any scope belonging to this API Resource is requested (or if the API is requested directly via Resource Indicators).
+Use Case: Use this when an API needs a claim for every request, regardless of the granular permission being used.
+Example: The `Billing_API` resource requires the `tenant_id` claim for data isolation. Whether the client requests `billing.read` or `billing.write`, the token will always include `tenant_id`.
+
+### ApiScopeProperty
+"RequiresMFA": "true" (You could write custom logic in IdentityServer to check if a user is asking for the `transfer_funds` scope, read this property, and force them to do 2-Factor Authentication if it's set to true).
 
 Duende IdentityServer is an OpenID Connect (OIDC) and OAuth 2.0 framework for ASP.NET Core. It implements the protocols that let applications authenticate users (OIDC) and obtain/issue access tokens for APIs (OAuth2).
 
-IdentityServer is built from services registered in ASP.NET Core DI. You can swap or extend profile services, token creation, claim mappings, key management, stores (implement IClientStore, IResourceStore, IPersistedGrantStore), custom grant validators (extension grants / token exchange), and more.
+IdentityServer is built from services registered in ASP.NET Core DI. You can swap or extend profile services, token creation, claim mappings, key management, stores (implement `IClientStore`, `IResourceStore`, `IPersistedGrantStore`), custom grant validators (extension grants / token exchange), and more.
  support for advanced features like Pushed Authorization Requests (PAR), Token Exchange, DPoP, audience/sender-constrained tokens, federation to external identity providers.
 
 ![](federation.svg)
@@ -104,8 +241,7 @@ You may federate with other enterprise identity systems like Active Directory, A
 
 Also, the gateway can make sure that all claims and identities that ultimately arrive at the client applications are trustworthy and in a format that the client expects
 
-Integration Of On-premise Products With Customer Identity Systems
-
+## Integration Of On-premise Products With Customer Identity Systems
 When building on-premise products, you have to integrate with a multitude of customer authentication systems. Maintaining variations of your business software for each product you have to integrate with, makes your software hard to maintain.
 
 With a federation gateway, you only need to adapt to these external systems at the gateway level, all of your business applications are shielded from the technical details.
@@ -113,16 +249,13 @@ With a federation gateway, you only need to adapt to these external systems at t
 ## Home Realm Discovery
 
 Home Realm Discovery (HRD) is the process of selecting the most appropriate authentication workflow for a user, especially when multiple authentication methods are available.
-
 Since users are typically anonymous when they arrive at the federation gateway, you need some sort of hint to optimize the login workflow. Such hint can come in many forms:
-
 - You present a list of available authentication methods to the user. This works for simpler scenarios, but probably not if you have a lot of choices or if this would reveal your customers’ authentication systems.
 - You ask the user for an identifier, such as their email address. Based on that, you infer the external authentication method . This is a common technique for SaaS systems.
-- The client application can give a hint to the gateway via a custom protocol parameter of IdentityServer’s built-in support for the `idp` parameter on `acr_values`. In some cases, the client already knows the appropriate authentication method. For example, when your customers access your software via a customer-specific URL (see here), you can present a subset of available authentication methods to the user, or even redirect to a single option.
+- The client application can give a hint to the gateway via a custom protocol parameter of IdentityServer’s built-in support for the `idp` parameter on `acr_values`. In some cases, the client already knows the appropriate authentication method. For example, when your customers access your software via a customer-specific URL, you can present a subset of available authentication methods to the user, or even redirect to a single option.
 - You restrict the available authentication methods per client in the client configuration using the `IdentityProviderRestrictions` property
 
 Every system has unique requirements. Always start by designing the desired user experience, then select and combine the appropriate HRD strategies to implement your required flow.
-
 
 ## SQL
 A many-to-many relationship occurs when multiple records in Table A can be associated with multiple records in Table B
@@ -130,7 +263,6 @@ A many-to-many relationship occurs when multiple records in Table A can be assoc
 Example: A Student can enroll in many Courses, and a Course can have many Students.
 
 ### The Junction Table Solution
-
 To model this, you create a third table that sits between the two entities. This table "breaks down" the M:M relationship into two one-to-many (1:M) relationships.
 
 In the junction table, the Primary Key is usually a Composite Key—a combination of both Foreign Keys
@@ -145,7 +277,6 @@ CREATE TABLE Enrollments (
     FOREIGN KEY (course_id) REFERENCES Courses(id)
 );
 ```
-
 ### Unique Constraint
 A Unique Constraint ensures that all values in a column (or a group of columns) are different from each other. No two rows can have the same value
 
@@ -158,7 +289,6 @@ In an `Orders` table, the `customer_id` is a Foreign Key that points back to the
 ### PRIMARY KEY
 
 A combination of NOT NULL and UNIQUE. It uniquely identifies each row in a table
-
 Use a Unique Constraint when...
 your primary goal is `Data Integrity`. If you want other tables to be able to point to this column as a Foreign Key, you should use a `Constraint`. Postgres requires the target of a Foreign Key to be either a `Primary Key` or have a formal `Unique Constraint`.
 
@@ -176,11 +306,8 @@ CREATE UNIQUE INDEX ux_active_config
 ON idmgmt.identity_provider (configuration_id) 
 WHERE deleted_at IS NULL;
 ```
-
 ### How they overlap in Postgres
 When you create a Unique Constraint, Postgres secretly runs a `CREATE UNIQUE INDEX` in the background. It needs that index to check if a value already exists without scanning the whole table every time you insert a row.
-
-
 
 ## Key Management
 Duende IdentityServer issues several types of tokens that are cryptographically signed, including identity tokens, JWT access tokens, and logout tokens. To create those signatures, IdentityServer needs key material. That key material can be configured automatically, by using the Automatic Key Management feature, or manually, by loading the keys from a secured location with static configuration.
@@ -193,37 +320,28 @@ Automatic Key Management follows best practices for handling signing key materia
 - announcement of upcoming new keys
 - maintenance of retired keys
 
-
 ## Managed Key Lifecycle
-
 Keys created by Automatic Key Management move through several phases. First, new keys are announced, that is, they are added to the list of keys in discovery, but not yet used for signing. After a configurable amount of `PropagationTime`, keys are `promoted` to be signing credentials, and will be used by IdentityServer to sign tokens. Eventually, enough time will pass that the key is older than the configurable `RotationTime`, at which point the key is retired, but kept in discovery for a configurable `RetentionDuration`. After the `RetentionDuration` has passed, keys are removed from discovery, and optionally deleted.
 
 The default is to rotate keys every 90 days, announce new keys with 14 days of propagation time, retain old keys for a duration of 14 days, and to delete keys when they are retired.
 
 The 14-day announcement period for the next key happens inside the current key's 90-day active window.
 
-
-Providers like Google or Auth0 rotate their keys regularly. They might have 3 keys in the JWKS: one that is expiring, one that is currently active, and one that is new. The kid tells your app exactly which one of those three was used to sign that specific token.
-
+Providers like Google or Auth0 rotate their keys regularly. They might have 3 keys in the JWKS: one that is expiring, one that is currently active, and one that is new. The `kid` tells your app exactly which one of those three was used to sign that specific token.
 
 ## Proof-of-Possession At The Application Layer / DPoP
 A mechanism for sender-constraining OAuth 2.0 tokens via a proof-of-possession mechanism on the application level. This mechanism allows for the detection of replay attacks with access and refresh tokens.
 
 ## Pushed Authorization Requests
-
 Pushed Authorization Requests (PAR) is a relatively new OAuth standard that improves the security of OAuth and OIDC flows by moving authorization parameters from the front channel to the back channel (that is, from redirect URLs in the browser to direct machine to machine http calls on the back end).
-
 This prevents an attacker in the browser from
 - seeing authorization parameters (which could leak PII) and from
 - tampering with those parameters (e.g., the attacker could change the scope of access being requested).
 
 Pushing the authorization parameters also keeps request URLs short. Authorize parameters might get very long when using more complex OAuth and OIDC features, and URLs that are long cause issues in many browsers and networking infrastructure
-
 The use of PAR is encouraged by the FAPI working group within the OpenID Foundation. For example, the FAPI2.0 Security Profile requires the use of PAR. This security profile is used by many of the groups working on open banking (primarily in Europe), in health care, and in other industries with high security requirements.
 
-
 ## The Problem
-
 The authentication system in ASP.NET Core is designed to be configured at startup time. That's where you add authentication handlers and their configuration to the DI container. Whenever you need to add a new handler or want to change the configuration, you need to restart the host to re-execute startup.
 
 Also - when a request comes into an ASP.NET Core host, the authentication middleware needs to distinguish between normal requests into your application and protocol callbacks that need to be handled by an authentication handler. For determining this, the middleware needs to ask every configured handler by iterating over them.
@@ -275,18 +393,15 @@ When you register multiple signing algorithms, the first in the list will be the
 When an API uses JWT access tokens for authorization, the API only validates the access token, not on how the token was obtained.
 
 OpenID Connect (OIDC) and OAuth 2.0 provide standardized, secure frameworks for token acquisition. Token acquisition varies depending on the type of app. Due to the complexity of secure token acquisition, it's highly recommended to rely on these standards:
-
 - For apps acting on behalf of a user and an application: OIDC is the preferred choice, enabling delegated user access. In web apps, the confidential code flow with Proof Key for Code Exchange (PKCE) is recommended for enhanced security.
   - If the calling app is an ASP.NET Core app with server-side OIDC authentication, you can use the `SaveTokens` property to store access token in a cookie for later use via `HttpContext.GetTokenAsync("access_token")`.
 - If the app has no user: The OAuth 2.0 client credentials flow is suitable for obtaining application access tokens.
 
-
 JWT Bearer Authentication provides:
 
-- Authentication: When using the `JwtBearerHandler`, bearer tokens are essential for authentication. The J`wtBearerHandler` validates the token and extracts the user's identity from its claims.
-- Authorization: Bearer tokens enable authorization by providing a collection of claims representing the user's or application's permissions, much like a cookie.
-- Delegated Authorization: When a user-specific access token is used to authenticate between APIs instead of an application-wide access token, this process is known as `delegated authorization`.
-
+- `Authentication`: When using the `JwtBearerHandler`, bearer tokens are essential for authentication. The `JwtBearerHandler` validates the token and extracts the user's identity from its claims.
+- `Authorization`: Bearer tokens enable authorization by providing a collection of claims representing the user's or application's permissions, much like a cookie.
+- `Delegated Authorization`: When a user-specific access token is used to authenticate between APIs instead of an application-wide access token, this process is known as `delegated authorization`.
 
 Authenticate user-> check delegated scope -> user authorization
 
@@ -343,7 +458,6 @@ builder.Services.AddIdentityServer() // Often used alongside IdentityServer
 [User / Directory]
 ``` 
 
-
 [FAPI 2.0: A High-Security Profile for OAuth and OpenID Connect](https://dl.gi.de/server/api/core/bitstreams/19a83b7e-d0bb-4483-a474-2ef6984ceef3/content)
 
 A growing number of APIs, from the financial, health and other sectors, give access to highly sensitive data and resources. With the Financial-grade API (FAPI) Security Profile, the OpenID Foundation has created an interoperable and secure standard to protect such APIs.
@@ -368,7 +482,6 @@ idmgmt_Account	Central user identity (SubjectId, name, status, culture)
 idmgmt_Client	Tenant/application namespaces
 idmgmt_AccountClientMapping	Links users to clients (multi-tenancy support)
 ```
-
  ## External Identity Providers (SSO)
 
  ```sh
@@ -493,7 +606,6 @@ IdP	Identity provider used (local or external)
         }
     }
 ```    
-
 ## SSO with Server-Side Sessions (Optional)
 If server-side sessions are enabled, the cookie just contains a key, and the actual session data is in the database:
 ```sh
@@ -581,7 +693,6 @@ builder.Services.AddIdentityServer(options =>
     options.Authentication.CookieAuthenticationScheme = "MyCustomCookies";
 });
 ```
-
 ## Multiple Cookie Schemes (External Login Flow)
 IdentityServer uses two cookie schemes during external login:
 ```sh
@@ -1188,8 +1299,7 @@ public class AuthenticationTicket
     }
 }
 ```
-Tokens (if `Options.SaveTokens` is true): Access token, id_token, refresh token, token_type and an "expires_at" value are stored into properties via StoreTokens (they appear under `properties.Items` with keys like `".Token.<name>" `and a `".TokenNames"` entry).
-
+Tokens (if `Options.SaveTokens` is true): Access token, id_token, refresh token, token_type and an "expires_at" value are stored into properties via `StoreTokens` (they appear under `properties.Items` with keys like `".Token.<name>" `and a `".TokenNames"` entry).
 Integrating LoginRadius with Duende IdentityServer allows your .Net Core application to authenticate users through enterprise identity providers using SAML 2.0 or OIDC
 
 ![alt text](image-1.png)
@@ -1198,27 +1308,20 @@ Integrating LoginRadius with Duende IdentityServer allows your .Net Core applica
 
 It supports dynamic identity providers (per client), which are dynamically loaded from the Client database using the following naming convention (scheme):
 `{clientNamespace}-{providerName}`
-
 1. User clicks login → GET `/external-login?provider=google&ns=namespace` and the SSO challenge is initiated.
-
 2. The external IdP authenticates the user and Callback hits `/external-login-callback`.
-
 3. `SsoCommand` is sent and SSO login is processed via MyspaceLoginService.
-
 4. Myspace authenticates the user with SSO and responds with additional user claims.
-
 5. User is signed in, user claims are added.
-
 6. User is redirected to Myspace with a valid session.
 
-### External login actions in Account controller
+## External login actions in Account controller
+The external login actions in the `AccountController` serve as the entry and exit points for the Single Sign-On (SSO) authentication flow using external identity providers. These actions are essential for initiating the authentication challenge and handling the callback once the user has authenticated with the external provider.
 
-The external login actions in the AccountController serve as the entry and exit points for the Single Sign-On (SSO) authentication flow using external identity providers. These actions are essential for initiating the authentication challenge and handling the callback once the user has authenticated with the external provider.
-
-`ExternalLogin`
+### ExternalLogin
 This action is triggered when a user chooses to log in using an external provider (e.g., Google, EntraID). It accepts two parameters: the provider name and the client namespace (ns). Using these, it constructs a unique authentication scheme via the `DynamicIdentityProviderSchemeCreator`, following the format `{clientNamespace}-{providerName}`. It then sets up `AuthenticationProperties`, including a redirect URI for the callback and the client namespace, and initiates the OIDC challenge using the constructed scheme. This redirects the user to the external identity provider for authentication.
 
-`ExternalLoginCallback`
+### ExternalLoginCallback
 This action handles the response from the external identity provider after the user has authenticated. It attempts to authenticate the user using the `external cookie` scheme. If successful, it extracts the tenant namespace and the `external user identifier` from the claims. It then constructs and sends an `SsoCommand` to the application layer to perform the internal login process, which includes validating the user and generating the appropriate claims. If the login is successful, the user is signed out of the external cookie and signed in internally with the generated claims. Finally, the user is redirected to the Myspace application.
 
 ### Domain Model
@@ -1241,7 +1344,6 @@ The domain model consists of several entity classes `IdentityProvider`, `Identit
 - Stores MetadataAddress for simple SAML implementation (might store more data such like certificates or other settings in future).
 
 ### Dynamic Authentication Scheme Name Creator
-
 The `DynamicAuthenticationSchemeNameCreator` is a utility class designed to standardize and manage the naming conventions used for authentication scheme names in a multi-tenant environment. It plays a crucial role in constructing unique scheme identifiers by combining the clientNamespace with the identity provider's name, using a consistent delimiter. This ensures that each identity provider can be distinctly identified and resolved at runtime. Additionally, the class provides functionality to parse these scheme names and extract the tenant namespace, which is essential for maintaining tenant context throughout the authentication process. By encapsulating this logic, the `DynamicAuthenticationSchemeNameCreator` is promotes consistency, reduces duplication, and simplifies the handling of dynamic identity provider configurations.
 
 Duende only requires the implementation of `IIdentityProviderStore` and all its dependencies to be registered in DI to enable the Dynamic Identity Providers feature:
@@ -1252,13 +1354,10 @@ private static void SetDynamicIdentityProviders(IServiceCollection serviceCollec
 ### Dynamic Identity Provider Store
 The `DynamicIdentityProviderStore` class serves as the core component responsible for dynamically resolving identity providers at runtime. It implements the `IIdentityProviderStore` interface from Duende and retrieves identity provider configurations from the Client database. As part of its operation, it extracts the clientNamespace from the scheme and stores it in the current HTTP context to ensure tenant-aware processing. Once the relevant identity provider data is retrieved, it leverages the DynamicIdentityProviderFactory to instantiate the appropriate IdentityProvider object, enabling seamless integration with Duende IdentityServer's authentication pipeline.
 
-
-Dynamic OIDC Options
-
+### Dynamic OIDC Options
 The dynamic OIDC options feature is a key enabler of flexibility and scalability in the system. Its primary goal is to allow the application to configure OpenID Connect (OIDC) authentication settings at runtime, based on namespace-specific identity provider data stored in the database. Rather than hardcoding values like the authority URL, client ID, or client secret, the system retrieves these settings dynamically and applies them to the OIDC middleware just before authentication is initiated. This approach ensures that each client namespace can have its own unique identity provider configuration without requiring code changes or redeployments. It also supports seamless onboarding of new providers and tenants, making the system highly adaptable to evolving business needs.
 
 The `DynamicOidcOptions` class leverages the Properties bag from the `IdentityProvider` class to apply namespace-specific authentication settings at runtime. This bag is a dictionary of key-value pairs that encapsulates all the necessary configuration data for a given identity provider—such as the Authority, ClientId, and ClientSecret. These values are populated by the `OidcConfiguration` class through its `GetConfigurationData()` method and passed along when the `IdentityProvider` instance is created by the `DynamicIdentityProviderFactory`.
-
 When a user initiates an authentication request, the `DynamicOidcOptions` class intercepts the configuration process and reads from this Properties dictionary to dynamically populate the `OpenIdConnectOptions`.
 
 ```c#
@@ -1302,16 +1401,12 @@ This factory dynamically builds authentication schemes for OIDC and SAML2P provi
 ## External Account Mapping
 
 ### Short-term solution
-
-The mapping between external account IDs and Myspace User IDs is stored in the dbo.IdLibrary table within Myspace, where the LoginName field represents the external ID. As part of our short-term solution focused on simplicity and timely delivery, Myspace will handle user authentication, specifically when the `AuthenticateSSO` endpoint is called by IM.
-
+The mapping between external account IDs and Myspace User IDs is stored in the dbo.IdLibrary table within Myspace, where the LoginName field represents the external ID. As part of our short-term solution focused on simplicity and timely delivery, Myspace will handle user authentication, specifically when the `AuthenticateSSO` endpoint is called by IM. During this process, Myspace will query the IdLibrary table to find the corresponding User ID for the given external account ID. This approach allows us to quickly implement SSO functionality without requiring immediate changes to Identity Management, while still ensuring that users can authenticate successfully using their external accounts.
 This mapping is necessary for Myspace to successfully complete the authentication flow when calling the AuthenticateSSO endpoint.
 
 ### Long-term solution
+As part of the long-term solution, the responsibility for managing external account mappings will transition from Myspace to Identity Management (IM). This means that the mapping data, currently stored in Myspace, will be migrated to IM, allowing it to become the system of record for external account identifiers. In this new setup, when Myspace receives an authentication request, it will call IM to validate the external account and retrieve the corresponding User ID. This change centralizes the management of external account mappings within IM, improving data consistency and enabling better control over authentication processes across different applications.
 
-As part of the long-term solution, the responsibility for managing external account mappings will transition from Myspace to Identity Management (IM). This means that the mapping data, currently stored in Myspace, will be migrated to IM, allowing it to become the system of record for external account identifiers.
-
- 
  ```c#
  builder.Services.AddIdentityServer(options => {
     // Basic IdentityServer configuration
@@ -1319,14 +1414,11 @@ As part of the long-term solution, the responsibility for managing external acco
 .AddDynamicExternalProviders() // Required for dynamic IdP registration
 .AddIdentityProviderStore(); // Your custom store
 ```
-
 The IIdentityProviderStore is the core interface responsible for retrieving provider metadata from your database. It handles two primary tasks: 
-
 - GetAllSchemeNamesAsync: Lists all available providers to show on the login page.
 - GetBySchemeAsync: Fetches full configuration (Authority, ClientId, etc.) when a user selects a specific provider
 
 ## Stores
-
 Store interfaces are designed to abstract accessing the configuration data.
 The stores used in Duende IdentityServer are:
 
@@ -1338,21 +1430,18 @@ The stores used in Duende IdentityServer are:
   `ApiScope` data.
 * [Identity Provider store](/identityserver/reference/stores/idp-store.md) for `IdentityProvider` data.
 
-
 This was tested with Google and EntraID as Identity Providers, each Identity Provider has its own method to configure SSO for OIDC and SAML, but it typically consists of:
-
-Creating a new application in the platform and get its protocol-specific settings (such like ClientId and ClientSecret).
-
-Configuring the redirect URI, which should be in the format `https://localhost:44319/federation/{scheme}/signin`, where `scheme` must match with the one configured in Identity Management.
+- Creating a new application in the platform and get its protocol-specific settings (such like ClientId and ClientSecret).
+- Configuring the redirect URI, which should be in the format `https://localhost:44319/federation/{scheme}/signin`, where `scheme` must match with the one configured in Identity Management.
 
 Creating a user account for testing.
 Identity Providers Configuration in Identity Management
 Once the external providers are set up on their site, we will need to configure the provider metadata and connection settings in the `idmgmt_IdentityProvider` and `idmgmt_IdentityProviderConfiguration` tables, respectively.
 
-1. Decide store: in-memory (dev), EF (recommended), or custom DB (implement IIdentityProviderStore).
+1. Decide store: in-memory (dev), EF (recommended), or custom DB (implement `IIdentityProviderStore`).
 2. Register IdentityServer and the dynamic provider services (in Program.cs).
 3. Seed or add IdentityProvider entries (OIDC/SAML/etc.) into the store (EF: ConfigurationDbContext.IdentityProviders).
-4. Provide a ConfigureAuthenticationOptions<TOptions, TProvider> implementation to map provider model → authentication options (e.g., map OidcProvider to `OpenIdConnectOptions`). Register that.
+4. Provide a` ConfigureAuthenticationOptions<TOptions, TProvider>` implementation to map provider model → authentication options (e.g., map OidcProvider to `OpenIdConnectOptions`). Register that.
 5. Build your login UI so it enumerates dynamic providers and calls Challenge(scheme) for the provider’s Scheme
 
 Mapping provider → auth options (the piece that makes runtime schemes work)
@@ -1361,7 +1450,6 @@ Duende provides an abstraction `ConfigureAuthenticationOptions<TOptions, TProvid
 `Unique callback paths`: Duende’s dynamic providers create one auth scheme per provider instance and expect each provider to have a unique callback path. You cannot (by default) use one single callback path for many dynamic providers — each dynamic provider must have its own CallbackPath. (If you need a single callback path, you'll need a 3rd-party dynamic-auth package that implements that behavior.)
 
 `Registering new provider types`: To support more than OIDC (say SAML or WS-Fed), you need to wire up the mapping between the handler type and the options type and provide serializers
-
 
 ```c#
 using Duende.IdentityServer.Configuration; // OidcProvider type lives here
@@ -1449,16 +1537,12 @@ public class ConfigureOidcOptions : ConfigureAuthenticationOptions<OpenIdConnect
 ```
 The ASP.NET Core remote-auth middleware (OpenID Connect handler, OAuth handlers, SAML handlers, etc.) registers handlers by scheme and matches incoming callback requests to a handler by the handler’s configured CallbackPath
 
-```sh
-| Endpoint                              | Owned by                       | Purpose                                        |
-| ------------------------------------- | ------------------------------ | ---------------------------------------------- |
-| **`/external-login`**                 | *Your app* (AccountController) | Starts the external auth flow                  |
-| **`/federation/{providerId}/signin`** | *ASP.NET Core auth middleware* | Receives the IdP response and validates tokens |
-| **`/external-login-callback`**        | *Your app* (AccountController) | Finalizes sign-in into IdentityServer          |
-
-```
-
-`/federation/{providerId}/signin`
+| Endpoint                          | Owned by                       | Purpose                                        |
+| :-------------------------------- | :----------------------------- | :--------------------------------------------- |
+| **`/external-login`**             | *Your app* (AccountController) | Starts the external auth flow                  |
+| **`/federation/{id}/signin`**     | *ASP.NET Core auth middleware* | Receives the IdP response and validates tokens |
+| **`/external-login-callback`**    | *Your app* (AccountController) | Finalizes sign-in into IdentityServer          |
+### `/federation/{providerId}/signin`
 Role: “Protocol callback endpoint”
 This one is the most misunderstood — and the most important.
 This endpoint is NOT a controller action.
@@ -1480,8 +1564,7 @@ The handler:
 - builds ClaimsPrincipal
 - signs into the temporary `external cookie`
 
-`external-login-callback`
-
+### `external-login-callback`
 This endpoint is again your app, not middleware.
 By the time this endpoint runs:
 - The external IdP is already validated
@@ -1590,8 +1673,7 @@ This endpoint:
     │◀───────────────────────│                              │                        │
 
 ```  
-
- Now IdentityServer sits in the middle as a federation gateway.
+Now IdentityServer sits in the middle as a federation gateway.
 
 ```sh
 DynamicAuthenticationSchemeProvider – DynamicAuthenticationSchemeProvider.cs
@@ -1707,7 +1789,6 @@ return Challenge(
     OpenIdConnectDefaults.AuthenticationScheme
 );
 ```
-
 The IdP redirects to:
 `/signin-oidc?code=...&state=...`
 ASP.NET Core routes this request to the OIDC handler because the handler registered that callback path.
@@ -1716,12 +1797,12 @@ ASP.NET Core routes this request to the OIDC handler because the handler registe
 A federation gateway is when IdentityServer sits between your applications and multiple external identity providers, providing a single point of integration:
 ```sh
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           YOUR APPLICATIONS                                  │
+│                           YOUR APPLICATIONS                                 │
 │                                                                             │
-│    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐                │
-│    │  Web    │    │ Mobile  │    │   SPA   │    │   API   │                │
-│    │  App    │    │  App    │    │  App    │    │ Client  │                │
-│    └────┬────┘    └────┬────┘    └────┬────┘    └────┬────┘                │
+│    ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐                 │
+│    │  Web    │    │ Mobile  │    │   SPA   │    │   API   │                 │
+│    │  App    │    │  App    │    │  App    │    │ Client  │                 │
+│    └────┬────┘    └────┬────┘    └────┬────┘    └────┬────┘                 │
 │         │              │              │              │                      │
 │         └──────────────┴──────┬───────┴──────────────┘                      │
 │                               │                                             │
@@ -1735,9 +1816,9 @@ A federation gateway is when IdentityServer sits between your applications and m
 │                     (Federation Gateway)                                  │
 │                                                                           │
 │  ┌─────────────────────────────────────────────────────────────────────┐  │
-│  │                    Single SSO Cookie                                 │ │
-│  │                    Unified User Model                                │ │
-│  │                    Consistent Token Format                           │ │
+│  │                    Single SSO Cookie                                │  │
+│  │                    Unified User Model                               │  │
+│  │                    Consistent Token Format                          │  │
 │  └─────────────────────────────────────────────────────────────────────┘  │
 │                                                                           │
 └────────────────────────────────┬──────────────────────────────────────────┘
@@ -1883,7 +1964,6 @@ public IActionResult OnGet(string scheme, string returnUrl)
 │             5. Redirects to original returnUrl                               │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
-
 these three endpoints are not specific to federation gateway. They're the standard pattern for ANY application that uses external identity providers.
 
 The RedirectUri is passed through the state parameter - encrypted and round-tripped through the external IdP
@@ -2027,7 +2107,7 @@ return Redirect(returnUrl);
 │     - Verify it matches what was sent                                       │
 │     - Prevents attackers from injecting fake responses                      │
 │                                                                             │
-│  2. EXCHANGE CODE FOR TOKENS (back-channel, server-to-server)              │
+│  2. EXCHANGE CODE FOR TOKENS (back-channel, server-to-server)               │
 │     POST https://oauth2.googleapis.com/token                                │
 │       grant_type=authorization_code                                         │
 │       code=abc123                                                           │
@@ -2035,7 +2115,7 @@ return Redirect(returnUrl);
 │       client_secret=yyy  ← SECRET! Never exposed to browser                 │
 │       redirect_uri=https://ids.com/signin-google                            │
 │                                                                             │
-│     Response: { "id_token": "eyJ...", "access_token": "..." }              │
+│     Response: { "id_token": "eyJ...", "access_token": "..." }               │
 │                                                                             │
 │  3. VALIDATE ID TOKEN                                                       │
 │     - Verify signature (fetch Google's public keys)                         │
@@ -2511,7 +2591,6 @@ This URL is sent to the IdP as the `redirect_uri` parameter
 public virtual Task<bool> ShouldHandleRequestAsync()
     => Task.FromResult(Options.CallbackPath == Request.Path);
 ```
-
 When the IdP redirects back to `/signin-oidc`, this method returns true, triggering the authentication flow.
 
 ```c#
@@ -3392,10 +3471,6 @@ public class UniqueJsonKeyClaimAction : JsonKeyClaimAction
 }
 ```
 
-
-
-
-
 ```c#
 /// <summary>
 /// A ClaimAction that deletes all claims from the given ClaimsIdentity with the given ClaimType.
@@ -3588,7 +3663,6 @@ ClaimActions.MapJsonSubKey("urn:facebook:location", "location", "name");
 o.ClaimActions.MapJsonSubKey("urn:google:image", "image", "url");
 ```
 
-
 ### DeleteClaim — Remove protocol/internal claims
 
 ```c#
@@ -3627,7 +3701,6 @@ ClaimActions.MapUniqueJsonKey("family_name", "family_name");
 ClaimActions.MapUniqueJsonKey("email", "email");
 
 ```
-
 The ID token already has `name`, `email`, etc. When you also call the userinfo endpoint, you'd get duplicates. `MapUniqueJsonKey` skips if the claim already exists.
 
 ### MapAll — Map every JSON property as a claim
@@ -3836,7 +3909,6 @@ public static IdentityBuilder AddIdentity<TUser, [DynamicallyAccessedMembers(Dyn
 ```
 
 ```c#
-
 namespace Duende.IdentityServer.UI.Pages.ExternalLogin;
 
 [AllowAnonymous]
@@ -4038,3 +4110,355 @@ public class Callback : PageModel
 ASP.NET Razor Pages require a .cshtml to define a route
 
 Single sign-on enables access to applications and resources within a single domain. FIM enables SSO to applications across multiple domains or organizations.
+
+For example, FIM is necessary for an organization to give employees one-click access to third-party applications like Salesforce, Workday, and Zoom. Using our financial services example from before, FIM allows bank customers to seamlessly access services that are externally managed, like ordering checks, sending money via Zelle, and applying for a loan.
+A response mode of `form_post`, as this allows us to keep codes out of the URL and protected via TLS.
+
+```sh
+-----BEGIN CERTIFICATE-----
+(Leaf certificate – issued to your domain)
+-----END CERTIFICATE-----
+
+-----BEGIN CERTIFICATE-----
+(Intermediate certificate – issued by the root)
+-----END CERTIFICATE-----
+
+-----BEGIN CERTIFICATE-----
+(Another intermediate, if needed)
+-----END CERTIFICATE-----
+```
+
+For example, the following code limits access to any actions on the AdministrationController to users who are a member of the Administrator role:
+
+ ```C#
+ [Authorize(Roles = "Administrator")]
+public class AdministrationController : Controller
+{
+    public IActionResult Index() =>
+        Content("Administrator");
+}
+//Multiple roles can be specified as a comma separated list:
+[Authorize(Roles = "HRManager,Finance")]
+public class SalaryController : Controller
+{
+    public IActionResult Payslip() =>
+                    Content("HRManager || Finance");
+}
+
+//The SalaryController is only accessible by users who are members of the HRManager role or the Finance role.
+
+```
+
+OAuth 2.0 is an authorization framework that lets an authenticated user grant access to third parties via tokens.
+
+### OAuth 2.0 comes with four main components:
+- `Resource Owner` – the end-user or system that owns a protected resource or data
+- `Resource Server` – the service exposes a protected resource, usually through an HTTP-based API
+- `Client` – calls the protected resource on behalf of the resource owner
+- `Authorization Server` – issues an OAuth 2.0 token and delivers it to the client after authenticating the resource owner
+
+Auth0 attaches the menu-admin role permissions as a claim to the access token, but not the role itself
+Through its permissions claim, the access token tells the server which actions the client can perform on which resources.
+
+Privileges define actions which can be performed against specific functionality. Privileges can be only be assigned to roles.
+i.e. `nexus:blobstores:create,read` means allow creating and reading blobstores
+Actions are functions allowing an explicit behavior the privilege can perform with the associated function.
+You must assign one or more actions when creating new privileges
+Consider how each action behaves when applied to a privilege type:
+```bash
+add
+#This action allows privileges to add repository content or scripts.
+
+browse
+#This action allows privileges to view the contents of associated repositories. Unlike `read`, privilege types with `browse` can only view and administrate repository contents from UI.
+
+create
+#This action allows privileges to create applicable configurations within the repository manager. Since a read permission is required to view a configuration, this action is associated with most existing create privileges.
+
+delete
+#This action allows privileges to delete repository manager configurations, repository contents, and scripts. A read action is generally associated with delete actions, so the actor can view these configurations to remove them.
+
+edit
+#This action sllows privileges to modify scripts, repository content and settings.
+
+read
+#This action allows privileges to view various configuration lists and scripts. Withoutread, any associated action will permit a privilege to see these lists but not its contents. The read action also allows privileges to utilize tools that can look at content from the command line.
+
+update
+#This action allows privileges to update repository manager configurations. Most existing privileges with update include read actions. Therefore, if creating custom privileges with update, the actor should consider adding read to the privilege in order to view repository manager configuration updates.
+
+*
+#This action is a wildcard giving you the ability to group all actions together. Using a wildcard applies all other applicable actions to the privilege.
+
+```
+others(GitHub) see permissions as actions
+- Roles represent a collection of permissions or privileges that define what actions a user can perform.
+- Users are assigned one or more roles, and their access rights are determined based on the permissions associated with those roles
+
+A permission is the declaration of an action that can be executed on a resource.
+Permissions are bound to a resource
+ 
+Privileges are assigned permissions
+When you assign a permission to a user, you are granting them a privilege. If you assign a user the permission to read a document, you are granting them the privilege to read that document
+Resources expose permissions, users have privileges( privileges can also be assigned to applications)
+
+The entity that protects the resource is responsible for restricting access to it, i.e., it is doing access control
+
+Scopes enable a mechanism to define what an application can do on behalf of the user
+(delegated access)
+Typically, scopes are permissions of a resource that the application wants to exercise on behalf of the user.
+
+Usually, the scopes granted to a third-party application are a subset of the permissions granted to the user
+when the application excercises its scopes, the user must have the corresponding priviledge at that time. The application can't do more than the user can do
+
+Scopes only come into play in delegation scenarios, and always limit what an app can do on behalf of a user: a scope cannot allow an application to do more than what the user can do. They are not meant to grant the application permissions outside of the privileges the delegated user already possesses
+
+In auth0, a role is a collection of permissions
+
+Scopes are not required when requesting an access token for an API configured with RBAC. Only the audience must be passed to Auth0
+- `create:items`: Create menu items
+- `update:items`: Update menu items
+- `delete:items`: Delete menu items
+
+`action:resource` is the format for permissions
+You need to associate the permissions you've created with this role, mapping it to your API's resources
+Through its permissions claim, the access token tells the server which actions the client can perform on which resources.
+
+A scope is a term used by the OAuth 2.0 protocol to define limitations on the amount of access that you can grant to an access token. In essence, permissions define the scope of an access token.
+
+[role-based-authentication-](https://thecibrax.com/role-based-authentication-for-net-core-apis-with-auth0)
+[Permissions, Privileges and Scopes](https://www.youtube.com/watch?v=vULfBEn8N7E)
+[Permissions, Privileges and Scopes](https://auth0.com/blog/permissions-privileges-and-scopes/)
+
+A privilege is a permission to perform an action or a task
+Privileges may be granted to individual users, to groups, or to PUBLIC. PUBLIC is a special group that consists of all users, including future users. Users that are members of a group will indirectly take advantage of the privileges granted to the group, where groups are supported.
+
+CORS before authentication, before authorization
+
+RBAC is a model of access control in which access is granted or denied based upon the roles assigned to a user. Permissions are not directly assigned to an entity; rather, permissions are associated with a role and the entity inherits the permissions of any roles assigned to it. Generally, the relationship between roles and users can be many-to-many, and roles may be hierarchical in nature.
+
+A role is simply a way to group permissions so that they can be assigned to users
+When a user is assigned to a role, the user will be granted all the permissions that the role has.
+
+A permission specifies an action that a user can take on a resource. For example, we might say that a user in an organization has permission to read repositories.
+
+Access Control (or Authorization) is the process of granting or denying specific requests from a user, program, or process. Access control also involves the act of granting and revoking those privileges.
+
+Role-Based Access Control (RBAC) is the primary authorization mechanism in Kubernetes and is responsible for permissions over resources. These permissions combine verbs (get, create, delete, etc.) with resources (pods, services, nodes, etc.) and can be namespace or cluster scoped
+
+A permission describes the ability to perform an action on a resource. For example, a document can be viewed, edited, and deleted.
+
+Permissions can be assigned to users. When you assign a permission to a user, you are granting that user that privilege for a specific resource, or set of resources
+
+Users are granted access by having permissions assigned to their identity. It's very common that permissions are grouped into roles, and those can be assigned to users. This is known as the role-based access control model. For example, we can imagine a blogging website where a user can view a post, a moderator can view and edit a post and an admin can view, edit and delete a post.
+
+#### Scope explosion
+Applications grow to have many types of resources, and each of these resources (documents, reports, projects, repositories) support a few different operations (create, read, update, delete, list). A fine-grained permission system often creates a cartesian product of these resource/operation tuples, resulting in dozens (or hundreds) of scopes. Injecting all of these scopes into a JWT isn’t possible, since the HTTP authorization header will exceed size limits.
+
+every user in the system should be granted the minimum privileges required to perform their duties (i.e. just-enough access)
+
+RBAC is a popular authorization model where permissions are aggregated into roles that are assigned to users or groups
+
+Role-Based Access Control (RBAC) describes the practice of aggregating discrete application permissions into a small set of roles, and assigning those roles to users or groups
+
+scopes are for applications while permissions are for users
+Developers should always abide by the principle of least privilege, asking for only the permissions they need for their applications to function.
+
+In OAuth 2.0, these types of permission sets are called scopes. They're also often referred to as permissions. In the Microsoft identity platform, a permission is represented as a string value. An app requests the permissions it needs by specifying the permission in the scope query parameter. Identity platform supports several well-defined OpenID Connect scopes and resource-based permissions (each permission is indicated by appending the permission value to the resource's identifier or application ID URI). For example, the permission string https://graph.microsoft.com/Calendars.Read is used to request permission to read users calendars in Microsoft Graph.
+
+[oauth2-scopes-are-not-permissions](https://www.aserto.com/blog/oauth2-scopes-are-not-permissions)
+[authorization](https://www.aserto.com/blog/fine-grained-authorization-whats-all-the-buzz-about)
+[isn'tauthorization-part-of-authentication](https://www.aserto.com/blog/isnt-authorization-part-of-authentication)
+[scopes-vs-permissions-authorization](https://www.aserto.com/blog/scopes-vs-permissions-authorization)
+
+### Delegated access (access on behalf of a user)
+In this access scenario, a user has signed into a client application. The client application accesses the resource on behalf of the user. Delegated access requires delegated permissions. Both the client and the user must be authorized separately to make the request
+For the client app, the correct delegated permissions must be granted. Delegated permissions can also be referred to as scopes. Scopes are permissions for a given resource that represent what a client application can access on behalf of the user
+
+For the user, the authorization relies on the privileges that the user has been granted for them to access the resource.
+
+### App-only access (Access without a user)
+In this access scenario, the application acts on its own with no user signed in. Application access is used in scenarios such as automation, and backup. This scenario includes apps that run as background services or daemons. It's appropriate when it's undesirable to have a specific user signed in, or when the data required can't be scoped to a single user
+App-only access uses app roles instead of delegated scopes. When granted through consent, app roles may also be called applications permissions. The client app must be granted appropriate application permissions of the resource app it's calling. Once granted, the client app can access the requested data
+
+### Types of permissions
+- Delegated permissions are used in the delegated access scenario. They're permissions that allow the application to act on a user's behalf. The application will never be able to access anything the signed in user themselves couldn't access.
+
+For example, take an application that has been granted the Files.Read.All delegated permission on behalf of the user. The application will only be able to read files that the user can personally access.
+- Application permissions, also known as app roles, are used in the app-only access scenario, without a signed-in user present. The application will be able to access any data that the permission is associated with.
+
+### Consent
+One way that applications are granted permissions is through consent. Consent is a process where users or admins authorize an application to access a protected resource. For example, when a user attempts to sign into an application for the first time, the application can request permission to see the user's profile and read the contents of the user's mailbox
+
+### How does delegated access work?
+The most important thing to remember about delegated access is that both your client app and the signed-in user need to be properly authorized. Granting a scope isn't enough. If either the client app doesn’t have the right scope, or the user doesn’t have sufficient rights to read or modify the resource, then the call will fail.
+
+Role-based access control (RBAC) allows certain users or groups to have specific permissions to access and manage resources
+
+OAuth 2.0 is a method through which a third-party app can access web-hosted resources on behalf of a user.
+
+In advanced RBAC implementations, roles may be mapped to collections of permissions, where a permission describes a granular action or activity that can be performed. Roles are then configured as combinations of permissions. Compute the overall permission set for an entity by combining the permissions granted to the various roles the entity is assigned.
+
+## What are OAuth Scopes for?
+OAuth scopes serve as permissions in the OAuth 2.0 framework, defining the level of access an application has to a user's account. Each scope represents a specific action, like reading emails or managing files. When a user grants an application access, they are consenting to the scopes requested by the application. This allows users to control what data and actions an application can access on their behalf.
+However, OAuth scopes were never designed to be a comprehensive authorization mechanism. They provide a way to limit access but not to specify or enforce detailed user permissions within an application. This distinction is often overlooked, leading to misuse and potential security risks​​. For example, if an application requests a scope like read:documents, it indicates that the application can read documents on behalf of the user, but it does not specify which documents or under what conditions. The application would need additional logic to determine the specific access rights for the user, which is outside the scope of OAuth itself.
+    
+**Fine-grain access**
+If you put a read:document scope in an access token, the application can look at the scope and say okay the user can read the document, but which document? All documents?
+
+### Scopes are not Permissions
+OAuth2 tokens have a scope. The scope is usually something like read:user or profile:write. The OAuth2 scope does not say what a user can and cannot do.
+
+OAuth is not suitable for user authorization. The fact that you have an access token that allows you to act on the user’s behalf does not mean that the user can perform an action. 
+
+An access token represents that the client application has been authorized by the user. It states what a user said (consent!) a third party application can do in their name. Let's take a quick look at the OAuth2 flow:
+
+1. The client application asks the user if they can access a protected resource on their behalf (by redirecting the user to the authorization server’s authorization endpoint, specifying exactly what they would like to access (scopes)).
+2. The user identifies themselves to the authorization server (but remember, OAuth is not authentication; you’ll need OpenID Connect to help you with that).
+3. The user authorizes the client application to access the protected resource on their behalf (using the OAuth consent process).
+4. The client application is issued an access token.
+For example:
+
+Alice allows myphotoapp to access her Facebook photos.
+Bob allows mytodolist to access his Google Calendar.
+Let's make a counterexample:
+
+If Alice would allow myphotoapp to act as an administrator of the system and delete the production database, it would not matter unless Alice is actually a system administrator. Similarly, Alice can not allow myphotoapp access to Bob's pictures, because she is not Bob.
+
+While OAuth is not user authentication, it does require the user to authenticate and consent to the client application’s authorization request. The user must prove their identity in order to delegate access.
+
+Client Authorization (Delegation)
+OAuth is an authorization protocol, but maybe a better name for it is a delegation protocol. It is a protocol that allows a client application to request permission to access a protected resource (API) on the resource owner’s (the user’s) behalf.
+
+a response mode of form_post, as this allows us to keep codes out of the URL and protected via TLS.
+
+[oauth-is-not-user-authorization](https://www.scottbrady91.com/oauth/oauth-is-not-user-authorization)
+[how-to-use-oauth-scopes-for-authorization](https://www.permit.io/blog/how-to-use-oauth-scopes-for-authorization)
+[delegated-access](https://learn.microsoft.com/en-us/entra/identity-platform/delegated-access-primer)
+
+[client-authentication](https://www.scottbrady91.com/oauth/client-authentication)
+
+Identity Tokens and OIDC Authentication
+An identity token describes the authentication event that took place at the identity provider. It contains information such as when the user last authenticated and how they authenticated. An identity token is always a signed JSON Web Token (JWT).
+
+UserInfo Endpoint
+The user info endpoint is a new API exposed by the identity provider. It allows applications to use an access token to discover identity data about the use
+
+The user info endpoint has its own set of scopes that authorize application’s to receive specific claim types about the user. For example, if the application is authorized to use the profile scope, then it can receive the user’s name, date of birth, and username from the user info endpoint.
+
+scopes are typically modeled as resources, which come in two flavors: identity and API.
+
+An identity resource allows you to model a scope that will permit a client application to view a subset of claims about a user. For example, the profile scope enables the app to see claims about the user such as name and date of birth.
+
+An API resource allows you to model access to an entire protected resource, an API, with individual permissions levels (scopes) that a client application can request access to.
+
+A scope is a permission  to do something  within a protected resource on behalf of the resource owner
+
+SSO establishes trust between the identity provider (IdP) and the service provider (SP). The IdP handles the identity information that authenticates the user requesting SSO, and the SP handles the service or application that the user wants to access.
+ 
+Identity standards such as SAML, OAuth2, and OpenID Connect enable the secure sharing of identity data among multiple SPs and IdPs
+
+### Client
+A client is a piece of software that requests tokens from your IdentityServer - either for authenticating a user (requesting an identity token) or for accessing a resource (requesting an access token). A client must be first registered with your IdentityServer before it can request tokens and is identified by a unique client ID
+[openid-connect-overview](https://www.scottbrady91.com/openid-connect/openid-connect-overview)
+
+Authorization, often referred to as access control, is the process of granting or denying access permissions to authenticated users or entities based on their identity, roles or attributes. It answers the question, "What are you allowed to do?"
+
+Authorization methods include:
+- Role-Based Access Control (RBAC): Users are assigned roles, and each role has specific permissions. Users inherit the permissions associated with their roles.
+- Attribute-Based Access Control (ABAC): Access is determined based on attributes of the user, resource and environment. For example, access might be granted if the user's department matches the resource's department.
+- Discretionary Access Control (DAC): Access control is at the discretion of the resource owner. Resource owners can grant or deny access to specific users.
+
+## AWS IAM
+A resource is the object being protected
+
+A resource's scope is a bounded extend of access that is possible to perform on a resource. A scope usually indicates what can be done with a given resource. Example of scopes are edit, view,delete and so on.
+
+Users attempt to perform actions on resources eg `S3::CreateBucket`
+Authorization to perform an action depends on a Policy
+
+Groups can only contain users
+Users and groups can be assigned policies
+
+policies define permissions which are the actions that can be performed on a resource. For example, the `s3:CreateBucket` permission allows creating an S3 bucket.
+A user in AWS represents the human user  or workload who uses the IAM user to interact with AWS. It has long term credentials
+
+A role can be assumed by anyone who needs it. You can use a role to delegate access to users,applications or services that don't normally have access to your AWS resources. Roles have short term credentials which expire after a short period of time
+`A policy is an object in AWS that, when associated with an identity or resource, defines their permissions`
+- `identity-based policies`: Permissions policies you attach to an IAM identity(user, group or role) that specify what that identity can do
+- `Resource-based policies`: Permissions policies you attach to a resource. Controls what actions a specified principal can perform on that resource and under what conditions
+
+IAM roles must have a resource based policy. This policy is called the 'Trust relationship'. it specifies who( which principal) can assume the role
+The Trust Relationship (or Trust Policy) is functionally a resource-based policy attached to that role
+
+In AWS, an Explicit Deny in a resource policy always overrides an Allow in an identity policy. This ensures that sensitive data stays protected even if identity permissions are over-provisioned
+However, it’s helpful to think of it this way: Trust Policies are just a specific branding of a Resource-Based Policy that only applies to Roles
+
+### Mandatory Access Control (KMS & Roles)
+For some services, resource-based policies aren't just a choice—they are required.
+- `KMS Keys`: You cannot use a KMS key unless the Key Policy (a resource-based policy) allows it. Even the root user of an account can be locked out of a key if the key policy doesn't explicitly grant access.
+
+Inside keycloak, you can set 2 types of permissions: resource-based and scoped-based.
+Resource-based permissions get applied directly to the resource
+Scoped-based permissions get applied to scope(s) or scope(s) and resources
+
+AWS roles get their credentials from  AWS Security token service(AWS STS)
+There are several different scenarios where you might use IAM roles on AWS:
+- An AWS service or resource accesses another AWS resource in your account – When an AWS resource needs access to other AWS services, functions, or resources, you can create a role that has appropriate permissions for use by that AWS resource. Services like AWS Lambda and Amazon Elastic Container Service (Amazon ECS) assume roles to deliver temporary credentials to your code that’s running in them.
+- An AWS service generates AWS credentials to be used by devices running outside AWS –
+- AWS IAM Roles Anywhere, AWS IoT Core, and AWS Systems Manager hybrid instances can deliver role session credentials to applications, devices, and servers that don’t run on AWS.
+- An AWS account accesses another AWS account – This use case is commonly referred to as a cross-account role pattern. It allows human or machine IAM principals from one AWS account to assume this role and act on resources within a second AWS account. A role is assumed to enable this behavior when the resource in the target account doesn’t have a resource-based policy that could be used to grant cross-account access.
+- An end user authenticated with a web identity provider or OpenID Connect (OIDC) needs access to your AWS resources – This use case allows identities from Facebook or OIDC providers such as GitHub, Amazon Cognito, or other generic OIDC providers to assume a role to access resources in your AWS account.
+- A customer performs workforce authentication using SAML 2.0 federation – This occurs when customers federate their users into AWS from their corporate identity provider (IdP) such as Okta, Microsoft Azure Active Directory, or Active Directory Federation Services (ADFS), or from AWS IAM Identity Center (successor to AWS Single Sign-On).
+
+An IAM role is an IAM principal whose entitlements are assumed in one of the preceding use cases. An IAM role differs from an IAM user as follows:
+- An IAM role can’t have long-term AWS credentials associated with it. Rather, an authorized principal (an IAM user, AWS service, or other authenticated identity) assumes the IAM role and inherits the permissions assigned to that role.
+- Credentials associated with an IAM role are temporary and expire.
+- An IAM role has a trust policy that defines which conditions must be met to allow other principals to assume it.
+
+There are three circumstances where policies are used for an IAM role:
+- `Trust policy` – The trust policy defines which principals can assume the role, and under which conditions. `A trust policy is a specific type of resource-based policy for IAM roles`. 
+- `Identity-based policies (inline and managed)` – These policies define the permissions that the user of the role is able to perform (or is denied from performing), and on which resources.
+- `Permissions boundary` – A permissions boundary is an advanced feature for using a managed policy to set the maximum permissions for a role. A principal’s permissions boundary allows it to perform only the actions that are allowed by both its identity-based permissions policies and its permissions boundaries. You can use permissions boundaries to delegate permissions management tasks, such as IAM role creation, to non-administrators so that they can create roles in self-service.
+
+### An example of a simple trust policy
+A common use case is when you need to provide access to a role in account A to assume a role in Account B. To facilitate this, you add an entry in the role in account B’s trust policy that allows authenticated principals from account A to assume the role through the sts:AssumeRole API call.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111122223333:root"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+```
+This trust policy has the same structure as other IAM policies with Effect, Action, and Condition components. It also has the Principal element, but no Resource element. This is because the resource is the IAM role itself. For the same reason, the Action element will only ever be set to relevant actions for role assumption. In this example, the trust policy allows any authenticated principal from account 111122223333 to assume the role. You can further restrict access by specifying particular IAM users or roles from account A, or by adding conditions to the policy. For example, you could add a condition that requires MFA authentication for the user assuming the role.
+
+Using the Principal element to limit who can assume a role
+
+In a trust policy, the Principal element indicates which other principals can assume the IAM role. In the preceding example, 111122223333 represents the AWS account number for the auditor’s AWS account. This allows a principal in the 111122223333 account with `sts:AssumeRole` permissions to assume this role.
+
+To allow a specific IAM role to assume a role, you can add that role within the Principal element. For example, the following trust policy would allow only the IAM role LiJuan from the 111122223333 account to assume the role it is attached to.
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::111122223333:role/LiJuan"
+      },
+      "Action": "sts:AssumeRole"
+    }
+  ]
+}
+```
+The principals included in the Principal element can be a principal defined within the IAM documentation, and can refer to an AWS or a federated principal
+If an IAM role has a principal from the same account in its trust policy directly, that principal doesn’t need an explicit entitlement in its identity-attached policy to assume the role. For example, if the trust policy of a role includes the root user of the same account, any principal in that account can assume the role without needing explicit sts:AssumeRole permissions in their identity-based policies. This is because the trust policy itself grants permission to assume the role to any principal in the account. However, it’s important to note that this can lead to over-permissioning if not carefully managed, as any user or role in the account could potentially assume the role without additional restrictions.

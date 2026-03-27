@@ -18,3 +18,4 @@ In this role, IdentityServer uses an external identity provider for logins, simi
 `uuid_extract_timestamp(uuid)`: Since v7 IDs contain the time they were created, you can pull that data back out. This effectively lets the ID double as a created_at field.
 
 `uuid_extract_version(uuid)`: Useful for verifying if an ID is actually a v7.
+
