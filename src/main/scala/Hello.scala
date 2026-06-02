@@ -56,8 +56,7 @@ trait KeyContainer {
   def created: Instant
 }
 
-class RsaKeyContainer(rsa: Any, val algorithm: String, val created: Instant)
-    extends KeyContainer { val id = "rsa-id" }
+class RsaKeyContainer(rsa: Any, val algorithm: String, val created: Instant) extends KeyContainer { val id = "rsa-id" }
 class X509KeyContainer(
     rsa: Any,
     val algorithm: String,
@@ -65,8 +64,7 @@ class X509KeyContainer(
     retirement: FiniteDuration,
     issuer: String
 ) extends KeyContainer { val id = "x509-id" }
-class EcKeyContainer(ec: Any, val algorithm: String, val created: Instant)
-    extends KeyContainer { val id = "ec-id" }
+class EcKeyContainer(ec: Any, val algorithm: String, val created: Instant) extends KeyContainer { val id = "ec-id" }
 
 trait IClock {
   def utcNow: Instant
@@ -134,8 +132,7 @@ class KeyManager(
 
     for ((algName, keysForAlg) <- groupedKeys) {
       getCurrentSigningKey(keysForAlg) match {
-        case None =>
-          return true
+        case None => true
 
         case Some(activeKeyFromCurrent) =>
           var activeKey = activeKeyFromCurrent
@@ -167,7 +164,7 @@ class KeyManager(
             )
           } else {
             logger.logTrace("Key rotation required now for alg {}.", algName)
-            return true
+            true
           }
       }
     }

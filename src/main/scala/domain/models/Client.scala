@@ -39,8 +39,7 @@ final case class Client(
     consentLifetime: Option[Int] = None,
     absoluteRefreshTokenLifetime: Int = 2592000,
     slidingRefreshTokenLifetime: Int = 1296000,
-    refreshTokenUsage: Int =
-      1, // (int)TokenUsage.OneTimeOnly in C#; consider modeling TokenUsage as enum
+    refreshTokenUsage: Int = 1, // (int)TokenUsage.OneTimeOnly in C#; consider modeling TokenUsage as enum
     updateAccessTokenClaimsOnRefresh: Boolean = false,
     refreshTokenExpiration: Int = 1, // (int)TokenExpiration.Absolute
     accessTokenType: Int = 0, // default AccessTokenType.Jwt; consider enum

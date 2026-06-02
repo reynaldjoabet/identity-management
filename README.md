@@ -4462,3 +4462,51 @@ To allow a specific IAM role to assume a role, you can add that role within the 
 ```
 The principals included in the Principal element can be a principal defined within the IAM documentation, and can refer to an AWS or a federated principal
 If an IAM role has a principal from the same account in its trust policy directly, that principal doesn’t need an explicit entitlement in its identity-attached policy to assume the role. For example, if the trust policy of a role includes the root user of the same account, any principal in that account can assume the role without needing explicit sts:AssumeRole permissions in their identity-based policies. This is because the trust policy itself grants permission to assume the role to any principal in the account. However, it’s important to note that this can lead to over-permissioning if not carefully managed, as any user or role in the account could potentially assume the role without additional restrictions.
+
+ASP.NET Core Data Protection covers cookies, browser state, and protected persisted data, while Duende signing keys handle token trust;
+
+Data Protection keys are for protecting application-local data. In a Duende setup, that includes things like authentication cookies and anti-forgery tokens, and Duende also uses Data Protection for sensitive data such as persisted grants, browser round-trip state/UI context payloads, and, when enabled, server-side session data. The persisted grant Data property is encrypted at rest by default, and server-side session Ticket data is stored encrypted by default
+
+Signing keys are separate. Duende uses them to sign identity tokens, JWT access tokens, and logout tokens, and the public portion is exposed through discovery/JWKS so clients and APIs can validate signatures.
+
+There is also a third concern: how the Data Protection key ring itself is protected at rest. Microsoft notes that once you choose an explicit persistence location for Data Protection keys, such as a file share, Redis, Blob Storage, or EF Core, the default encryption-at-rest behavior is removed, so you should add an explicit protection mechanism such as an X.509 certificate or Azure Key Vault and lock down access to the storage location. Data Protection keys rotate automatically, with a 90-day lifetime by default
+
+Duende’s auto-managed key material that is generally the right idea: Duende says keys created by Automatic Key Management are protected at rest using ASP.NET Core Data Protection by default, controlled by DataProtectKeys, which is on by default
+
+```sh
+# file 3.sql
+Configuration Database (IdentityServer)
+Table Name
+ApiResources
+ApiResourceClaims
+ApiResourceProperties
+ApiResourceScopes
+ApiResourceSecrets
+ApiScopes
+ApiScopeClaims
+ApiScopeProperties
+Clients
+ClientClaims
+ClientCorsOrigins
+ClientGrantTypes
+ClientIdPRestrictions
+ClientPostLogoutRedirectUris
+ClientProperties
+ClientRedirectUris
+ClientScopes
+ClientSecrets
+IdentityProviders
+IdentityResources
+IdentityResourceClaims
+IdentityResourceProperties
+```
+
+```sh
+Operational / Persisted Grant Database (IdentityServer)
+Table Name
+DeviceCodes
+Keys
+PersistedGrants
+PushedAuthorizationRequests
+ServerSideSessions
+```
