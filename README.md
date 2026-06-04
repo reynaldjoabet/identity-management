@@ -4510,3 +4510,23 @@ PersistedGrants
 PushedAuthorizationRequests
 ServerSideSessions
 ```
+
+The RFC grammar for one token is `1*( %x21 / %x23-5B / %x5D-7E )`, which excludes space, double quote, and backslash
+
+Iron is well suited here because it lets you bind constraints to strings and validate them at compile time for literals or at runtime for user/client input
+
+Because OAuth says scope order does not matter, model granted/requested scopes as a `Set`, not a `List`
+
+- `List` — ordered and allows duplicates. `List("a", "b")` ≠ `List("b", "a")`, and `List("a", "a")` is valid.
+- `Set` — unordered and de-duplicated. `Set("a", "b")` == `Set("b", "a")`, and adding `"a" `twice still leaves one element.
+
+The OAuth spec (RFC 6749 §3.3) defines `scope` as a space-delimited, case-sensitive string where order carries no meaning — `"read write"` grants exactly the same access as `"write read"`. There's also no semantic value in requesting the same scope twice.
+
+`Set` matches those semantics precisely
+
+A scope is not the whole authorization decision. For Open Banking and FAPI-style APIs, the access token scope must be combined with client registration, consent, authorization_details, sender-constrained token checks, resource owner binding, and resource-level checks. FAPI 2.0 is a high-security OAuth profile for high-value APIs and sender-constrained tokens; it does not replace your business authorization model.
+
+`Singleton type (BalancesRead.type) — erased, compile-time only`
+
+The same is true of Scala 3 literal types (`"openid"`, `42`, `true` as types): they constrain at compile time, then erase to `String` / `Int` / `Boolean`.
+

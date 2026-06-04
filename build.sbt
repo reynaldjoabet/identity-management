@@ -24,7 +24,22 @@ ThisBuild / scalacOptions ++= Seq(
 lazy val root = (project in file("."))
   .settings(
     name := "identity-management",
-    libraryDependencies ++= Seq(iron, munit)
+    libraryDependencies ++= Seq(
+      iron,
+      munit,
+      catsEffect,
+      http4sDsl,
+      emberServer,
+      emberClient,
+      http4sCirce,
+      jsoniter,
+      jsoniterMacros,
+      circeCore,
+      circeGeneric,
+      ironJsoniter,
+      fs2,
+      fs2Kafka
+    )
   )
 
 outputStrategy := Some(StdoutOutput)
