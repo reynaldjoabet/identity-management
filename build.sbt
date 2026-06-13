@@ -38,7 +38,15 @@ lazy val root = (project in file("."))
       circeGeneric,
       ironJsoniter,
       fs2,
-      fs2Kafka
+      fs2Kafka,
+      "tools.jackson.core" % "jackson-databind" % "3.2.0",
+      "tools.jackson.core" % "jackson-core" % "3.2.0",
+      vault,
+      slf4j,
+      nimbusJoseJwt,
+      nimbusOauth2Oidc,
+      munitCatsEffect,
+      munit
     )
   )
 
