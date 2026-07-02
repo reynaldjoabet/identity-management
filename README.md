@@ -4330,7 +4330,7 @@ While OAuth is not user authentication, it does require the user to authenticate
 Client Authorization (Delegation)
 OAuth is an authorization protocol, but maybe a better name for it is a delegation protocol. It is a protocol that allows a client application to request permission to access a protected resource (API) on the resource owner’s (the user’s) behalf.
 
-a response mode of form_post, as this allows us to keep codes out of the URL and protected via TLS.
+a response mode of `form_post`, as this allows us to keep codes out of the URL and protected via TLS.
 
 [oauth-is-not-user-authorization](https://www.scottbrady91.com/oauth/oauth-is-not-user-authorization)
 [how-to-use-oauth-scopes-for-authorization](https://www.permit.io/blog/how-to-use-oauth-scopes-for-authorization)
