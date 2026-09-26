@@ -6,34 +6,33 @@ on:
   pull_request:
     branches: [main]
 
-# Security: apply the principle of least privilege
 permissions:
   contents: read
 
-# Cancel in-progress runs on the same ref when a new push lands
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Build Java ${{ matrix.java }} (${{ matrix.distribution }}) on ${{ matrix.os }}
+    name: Scala ${{ matrix.scala }} / Java ${{ matrix.java }} (${{ matrix.distribution }}) on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
 
     strategy:
       fail-fast: false
       matrix:
-        java: [17, 21]
+        java: [17,21,25]
         distribution: [temurin, corretto]
+        scala: ['3.3.8', '3.9.0']
         os: [ubuntu-latest]
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Set up Java ${{ matrix.java }} (${{ matrix.distribution }})
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           distribution: ${{ matrix.distribution }}
           java-version: ${{ matrix.java }}
@@ -49,10 +48,7 @@ jobs:
         uses: sbt/setup-sbt@v1
 
       - name: Check formatting
-        run: sbt "scalafmtCheckAll; scalafmtSbtCheck"
-
-      - name: Compile
-        run: sbt "Test / compile"
-
-      - name: Run tests
-        run: sbt test
+        run: sbt -v --server "scalafmtSbtCheck; scalafmtCheckAll"
+      
+      - name: Compile and test
+        run: sbt -v --server "++${{ matrix.scala }}" "Test/compile; test"
