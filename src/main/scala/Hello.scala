@@ -20,8 +20,8 @@ import java.security.KeyFactorySpi //The provider implementation
 import java.security.KeyFactory
 import java.security
 
-object Hello extends Greeting with App {
-  println(greeting)
+object Hello extends Greeting {
+  def main(args: Array[String]) = println(greeting)
 }
 
 trait Greeting {

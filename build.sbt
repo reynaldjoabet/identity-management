@@ -1,24 +1,24 @@
 import Dependencies._
 
-ThisBuild / scalaVersion := "3.3.8"
+ThisBuild / scalaVersion := "3.9.0"
 ThisBuild / version := "0.1.0-SNAPSHOT"
-ThisBuild / scalacOptions ++= Seq(
+
+ThisBuild / crossScalaVersions := Seq("3.3.8", "3.9.0")
+
+ThisBuild / scalacOptions := Seq(
   "-encoding",
   "UTF-8",
   "-no-indent",
   "-deprecation",
   "-feature",
   "-unchecked",
-  "-explain", // + actionable error messages
-  "-source:3.3", // + pin source level, no silent drift
+  // "-Werror",
   // "-Wunused:all",
   "-Wvalue-discard",
   "-Wnonunit-statement",
-  "-Ysafe-init",
-  "-language:strictEquality", // + catch nonsensical == (Money vs String, etc.)
-  "-Ykind-projector",
-  "-Xmax-inlines",
-  "64"
+  "-language:strictEquality",
+  "-Xcheck-macros",
+  "-Xmax-inlines:64"
 )
 
 lazy val root = (project in file("."))
