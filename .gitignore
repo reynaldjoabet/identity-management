@@ -38,3 +38,5 @@ metals.sbt
 /src/main/resources/1.sql
 /src/main/resources/identitymanagement.sql
 
+# SemanticDB for the build definition, written on reload when semanticdbEnabled is set globally
+*.sbt.semanticdb
